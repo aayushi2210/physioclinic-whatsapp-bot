@@ -27,7 +27,7 @@ let nextApptId    = 3;
 const conversations = {};
 
 // ─── CLINIC SYSTEM PROMPT ───────────────────────────────────────────
-const SYSTEM_PROMPT = `You are a WhatsApp chatbot receptionist for PhysioClinic, a physiotherapy clinic in South Delhi, India.
+const SYSTEM_PROMPT = `You are a WhatsApp chatbot receptionist for PhysioClinic, a physiotherapy clinic in Noida, India.
 
 CLINIC DETAILS:
 - Hours: Monday to Saturday, 8:00 AM to 6:00 PM. Closed Sundays.
@@ -53,7 +53,7 @@ YOU CAN HELP WITH:
 3. View or cancel appointments
 4. Reschedule appointments
 5. Payment confirmation queries
-6. Connect to a human receptionist
+6. Connect to a human 
 
 RULES:
 - Be warm, friendly and concise
@@ -88,6 +88,34 @@ async function sendMessage(to, text) {
   }
 }
 
+// ─── GEMINI CALL WITH AUTO RETRY ────────────────────────────────────
+async function callGemini(contents, contextNote, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`,
+        {
+          system_instruction: { parts: [{ text: SYSTEM_PROMPT + contextNote }] },
+          contents,
+          generationConfig: { maxOutputTokens: 300, temperature: 0.7 }
+        },
+        { headers: { "Content-Type": "application/json" } }
+      );
+      return response.data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+    } catch (err) {
+      const status = err.response?.data?.error?.status;
+      if (status === "RESOURCE_EXHAUSTED" && i < retries - 1) {
+        console.log(`Rate limited — retrying in ${(i + 1) * 5} seconds...`);
+        await new Promise(r => setTimeout(r, (i + 1) * 5000)); // wait 5s, 10s, 15s
+      } else {
+        console.error("Gemini AI error:", JSON.stringify(err.response?.data || err.message, null, 2));
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
 // ─── GET AI REPLY FROM GEMINI (FREE) ────────────────────────────────
 async function getAIReply(userPhone, userMessage) {
   if (!conversations[userPhone]) {
@@ -116,35 +144,13 @@ async function getAIReply(userPhone, userMessage) {
   // Keep last 10 messages only
   const recentHistory = history.slice(-10);
 
-  try {
-    const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        system_instruction: {
-          parts: [{ text: SYSTEM_PROMPT + contextNote }]
-        },
-        contents: recentHistory,
-        generationConfig: {
-          maxOutputTokens: 300,
-          temperature: 0.7,
-        }
-      },
-      {
-        headers: { "Content-Type": "application/json" }
-      }
-    );
+  const reply = await callGemini(recentHistory, contextNote);
 
-    const reply = response.data?.candidates?.[0]?.content?.parts?.[0]?.text
-      || "Sorry, I could not process your request. Please call us at +91-XXXXXXXXXX.";
-
-    // Save assistant reply to history
+  if (reply) {
     history.push({ role: "model", parts: [{ text: reply }] });
-
     return reply;
-  } catch (err) {
-    console.error("Gemini AI error:", JSON.stringify(err.response?.data || err.message, null, 2));
-    return "Sorry, I am having a technical issue. Please call us directly at +91-XXXXXXXXXX or try again in a moment.";
   }
+  return "Sorry, I am a little busy right now. Please try again in a moment or call us at +91-XXXXXXXXXX.";
 }
 
 // ─── SEND BOOKING CONFIRMATION ───────────────────────────────────────
@@ -260,7 +266,7 @@ app.post("/webhook", async (req, res) => {
 
     if (["human", "receptionist", "speak to someone", "call me"].includes(lower)) {
       await sendMessage(from,
-        "Connecting you to our reception team.\n\nPlease call us directly:\n+91-XXXXXXXXXX\n\nAvailable Monday to Saturday, 8 AM to 6 PM.\n\nIs there anything else I can help you with?"
+        "Connecting you to our team.\n\nPlease call us directly:\n+91-XXXXXXXXXX\n\nAvailable Monday to Saturday, 8 AM to 6 PM.\n\nIs there anything else I can help you with?"
       );
       return;
     }
