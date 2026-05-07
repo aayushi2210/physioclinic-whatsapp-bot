@@ -66,11 +66,11 @@ const Appointment = mongoose.model("Appointment", appointmentSchema);
 const conversations = {};
 
 // ─── CLINIC SYSTEM PROMPT ───────────────────────────────────────────
-const SYSTEM_PROMPT = `You are a WhatsApp chatbot receptionist for PhysioClinic, a physiotherapy clinic in Noida Sector-41 , India.
+const SYSTEM_PROMPT = `You are a WhatsApp chatbot receptionist for PhysioClinic, a physiotherapy clinic in South Delhi, India.
 
 CLINIC DETAILS:
 - Hours: Monday to Saturday, 8:00 AM to 6:00 PM. Closed Sundays.
-- Location: Noida Sector-41
+- Location: South Delhi
 
 THERAPISTS:
 - Dr. Rao: Back and spine specialist
@@ -535,6 +535,40 @@ Return ONLY the JSON, no other text.`
 
   } catch (err) {
     console.error("Webhook error:", err.message);
+  }
+});
+
+// ─── DOCTOR WHATSAPP NUMBER ──────────────────────────────────────────
+// Change this to doctor's actual WhatsApp number with country code
+const DOCTOR_PHONE = process.env.DOCTOR_PHONE || "919711311785";
+
+// ─── SEND DAILY SCHEDULE TO DOCTOR ───────────────────────────────────
+app.post("/api/send-schedule", async (req, res) => {
+  try {
+    const today = new Date().toISOString().split("T")[0];
+    const todayAppts = await Appointment.find({
+      date: today,
+      status: "confirmed"
+    }).sort({ time: 1 });
+
+    if (todayAppts.length === 0) {
+      await sendMessage(DOCTOR_PHONE,
+        `🗓 Today's Schedule — ${today}\n\nNo appointments today. Rest day! 😊\n\n— PhysioDesk`
+      );
+    } else {
+      const lines = todayAppts.map((a, i) =>
+        `${i + 1}. ${a.patientName}\n   📋 ${a.type}\n   👨‍⚕️ ${a.therapist}\n   🕐 ${a.time}\n   💰 ${a.payStatus === "paid" ? "Paid ✅" : a.payStatus === "clinic" ? "Pay at clinic 🏥" : "Pending ⚠️"}\n   💵 ₹${a.amount}`
+      ).join("\n\n");
+
+      await sendMessage(DOCTOR_PHONE,
+        `🗓 Today's Schedule — ${today}\n\nTotal patients: ${todayAppts.length}\n\n${lines}\n\n— PhysioDesk`
+      );
+    }
+
+    res.json({ success: true, message: "Schedule sent to doctor!" });
+  } catch (err) {
+    console.error("Send schedule error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
