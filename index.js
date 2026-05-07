@@ -9,6 +9,17 @@ const mongoose = require("mongoose");
 const app = express();
 app.use(express.json());
 
+// ─── CORS — allow all origins ────────────────────────────────────────
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 // ─── CONNECT TO MONGODB (optional — bot works without it too) ───────
 let dbConnected = false;
 if (process.env.MONGODB_URI) {
@@ -55,11 +66,11 @@ const Appointment = mongoose.model("Appointment", appointmentSchema);
 const conversations = {};
 
 // ─── CLINIC SYSTEM PROMPT ───────────────────────────────────────────
-const SYSTEM_PROMPT = `You are a WhatsApp chatbot receptionist for PhysioClinic, a physiotherapy clinic in Noida sector-41, India.
+const SYSTEM_PROMPT = `You are a WhatsApp chatbot receptionist for PhysioClinic, a physiotherapy clinic in South Delhi, India.
 
 CLINIC DETAILS:
 - Hours: Monday to Saturday, 8:00 AM to 6:00 PM. Closed Sundays.
-- Location:Noida sector-41
+- Location: South Delhi
 
 THERAPISTS:
 - Dr. Rao: Back and spine specialist
