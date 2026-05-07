@@ -281,12 +281,20 @@ app.post("/webhook", async (req, res) => {
 
     // ── Auto-detect and save appointment using AI extraction ─────
     if (dbConnected && existingPatient) {
-      const bookingWords = ["book","appointment","schedule","confirm","fix","slot","visit","come","10","11","12","1pm","2pm","3pm","morning","afternoon","today","tomorrow"];
+      const bookingWords = ["book","appointment","schedule","confirm","fix","slot","visit","tomorrow","today","morning","afternoon","evening","am","pm","baje","kal","aaj"];
       const isBooking = bookingWords.some(k => lower.includes(k));
 
       if (isBooking) {
         try {
-          // Use Groq to extract appointment details
+          // Build full conversation context for better extraction
+          const convHistory = (conversations[from] || [])
+            .filter(m => m.role && m.content && !m.appointmentList)
+            .slice(-10)
+            .map(m => `${m.role === "user" ? "Patient" : "Bot"}: ${m.content}`)
+            .join("\n");
+
+          const fullContext = `${convHistory}\nPatient: ${text}`;
+
           const extractRes = await axios.post(
             "https://api.groq.com/openai/v1/chat/completions",
             {
@@ -296,20 +304,25 @@ app.post("/webhook", async (req, res) => {
               messages: [
                 {
                   role: "system",
-                  content: `Extract appointment details from the message. Today is ${new Date().toISOString().split("T")[0]}.
-Return ONLY a valid JSON object with these fields:
+                  content: `Extract appointment details from this conversation. Today is ${new Date().toISOString().split("T")[0]}. Tomorrow is ${new Date(Date.now()+86400000).toISOString().split("T")[0]}.
+Return ONLY a valid JSON object:
 {
   "hasAppointment": true/false,
   "date": "YYYY-MM-DD or null",
   "time": "HH:MM or null",
   "therapist": "Dr. Rao or Dr. Mehra or Dr. Singh or null",
-  "type": "Initial Assessment or Follow-up or Walk-in or Review or Physiotherapy Session or null"
+  "type": "Initial Assessment or Follow-up or Walk-in or Review or Physiotherapy Session or null",
+  "payMode": "online or clinic or null"
 }
-If date is "today" use today's date. If "tomorrow" use tomorrow's date.
-If time is like "10am" convert to "10:00", "2pm" to "14:00" etc.
+Rules:
+- "tomorrow"/"kal" = ${new Date(Date.now()+86400000).toISOString().split("T")[0]}
+- "today"/"aaj" = ${new Date().toISOString().split("T")[0]}
+- "12 PM" = "12:00", "2pm" = "14:00", "10am" = "10:00"
+- "at clinic" = payMode clinic
+- hasAppointment = true only if BOTH date AND time are found
 Return ONLY the JSON, no other text.`
                 },
-                { role: "user", content: text }
+                { role: "user", content: fullContext }
               ]
             },
             {
@@ -324,6 +337,8 @@ Return ONLY the JSON, no other text.`
           const clean = extractedText.replace(/```json|```/g, "").trim();
           const extracted = JSON.parse(clean);
 
+          console.log("Extracted appointment data:", JSON.stringify(extracted));
+
           if (extracted.hasAppointment && extracted.date && extracted.time) {
             const priceMap = {
               "Initial Assessment": 1800,
@@ -336,6 +351,7 @@ Return ONLY the JSON, no other text.`
             const apptType = extracted.type || "Initial Assessment";
             const amount = priceMap[apptType] || 1200;
             const therapist = extracted.therapist || "Dr. Rao";
+            const payMode = extracted.payMode || "pending";
 
             // Check duplicate
             const existing = await Appointment.findOne({
@@ -346,7 +362,7 @@ Return ONLY the JSON, no other text.`
             });
 
             if (!existing) {
-              const saved = await Appointment.create({
+              await Appointment.create({
                 patientId: existingPatient._id,
                 patientName: existingPatient.name,
                 patientPhone: cleanPhone,
@@ -355,16 +371,18 @@ Return ONLY the JSON, no other text.`
                 time: extracted.time,
                 type: apptType,
                 status: "confirmed",
-                payStatus: "pending",
+                payStatus: payMode === "clinic" ? "clinic" : "pending",
                 amount
               });
-              console.log(`✅ Appointment saved via AI: ${existingPatient.name} — ${extracted.date} at ${extracted.time}`);
+              console.log(`✅ Appointment saved: ${existingPatient.name} — ${extracted.date} at ${extracted.time}`);
             } else {
-              console.log(`ℹ️ Appointment already exists for ${cleanPhone} on ${extracted.date}`);
+              console.log(`ℹ️ Appointment already exists: ${cleanPhone} on ${extracted.date}`);
             }
+          } else {
+            console.log("ℹ️ Not enough info to save appointment yet");
           }
         } catch (extractErr) {
-          console.log("Appointment extraction skipped:", extractErr.message);
+          console.log("Appointment extraction error:", extractErr.message);
         }
       }
     }
