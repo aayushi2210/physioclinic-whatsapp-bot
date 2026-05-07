@@ -279,84 +279,92 @@ app.post("/webhook", async (req, res) => {
       }
     }
 
-    // ── Auto-detect and save appointment from conversation ────────
+    // ── Auto-detect and save appointment using AI extraction ─────
     if (dbConnected && existingPatient) {
-      const datePattern = /\b(\d{4}-\d{2}-\d{2}|today|tomorrow|\d{1,2}(?:st|nd|rd|th)?(?:\s+\w+)?)\b/i;
-      const timePattern = /\b(\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{2}:\d{2})\b/i;
-      const therapistPattern = /dr\.?\s*(rao|mehra|singh)/i;
-      const typePattern = /(initial assessment|follow.?up|walk.?in|review|physiotherapy)/i;
-
-      const hasDate = datePattern.test(text);
-      const hasTime = timePattern.test(text);
-      const bookingWords = ["book","appointment","schedule","confirm","fix appointment","slot"];
+      const bookingWords = ["book","appointment","schedule","confirm","fix","slot","visit","come","10","11","12","1pm","2pm","3pm","morning","afternoon","today","tomorrow"];
       const isBooking = bookingWords.some(k => lower.includes(k));
 
-      if (isBooking && (hasDate || hasTime)) {
-        // Extract details
-        const therapistMatch = text.match(therapistPattern);
-        const typeMatch = text.match(typePattern);
-        const timeMatch = text.match(timePattern);
+      if (isBooking) {
+        try {
+          // Use Groq to extract appointment details
+          const extractRes = await axios.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            {
+              model: "llama-3.3-70b-versatile",
+              max_tokens: 200,
+              temperature: 0,
+              messages: [
+                {
+                  role: "system",
+                  content: `Extract appointment details from the message. Today is ${new Date().toISOString().split("T")[0]}.
+Return ONLY a valid JSON object with these fields:
+{
+  "hasAppointment": true/false,
+  "date": "YYYY-MM-DD or null",
+  "time": "HH:MM or null",
+  "therapist": "Dr. Rao or Dr. Mehra or Dr. Singh or null",
+  "type": "Initial Assessment or Follow-up or Walk-in or Review or Physiotherapy Session or null"
+}
+If date is "today" use today's date. If "tomorrow" use tomorrow's date.
+If time is like "10am" convert to "10:00", "2pm" to "14:00" etc.
+Return ONLY the JSON, no other text.`
+                },
+                { role: "user", content: text }
+              ]
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+                "Content-Type": "application/json",
+              }
+            }
+          );
 
-        // Determine date
-        let apptDate = new Date().toISOString().split("T")[0]; // today
-        if (lower.includes("tomorrow")) {
-          const tomorrow = new Date();
-          tomorrow.setDate(tomorrow.getDate() + 1);
-          apptDate = tomorrow.toISOString().split("T")[0];
-        }
-        const explicitDate = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
-        if (explicitDate) apptDate = explicitDate[1];
+          const extractedText = extractRes.data?.choices?.[0]?.message?.content || "{}";
+          const clean = extractedText.replace(/```json|```/g, "").trim();
+          const extracted = JSON.parse(clean);
 
-        // Format time
-        let apptTime = "10:00";
-        if (timeMatch) {
-          const t = timeMatch[1].toLowerCase().replace(/\s/g, "");
-          if (t.includes("am") || t.includes("pm")) {
-            const num = parseInt(t);
-            const isPm = t.includes("pm");
-            const hour = isPm && num !== 12 ? num + 12 : (!isPm && num === 12 ? 0 : num);
-            apptTime = `${String(hour).padStart(2, "0")}:00`;
-          } else {
-            apptTime = t;
+          if (extracted.hasAppointment && extracted.date && extracted.time) {
+            const priceMap = {
+              "Initial Assessment": 1800,
+              "Follow-up": 1200,
+              "Walk-in": 900,
+              "Review": 1000,
+              "Physiotherapy Session": 1500
+            };
+
+            const apptType = extracted.type || "Initial Assessment";
+            const amount = priceMap[apptType] || 1200;
+            const therapist = extracted.therapist || "Dr. Rao";
+
+            // Check duplicate
+            const existing = await Appointment.findOne({
+              patientPhone: cleanPhone,
+              date: extracted.date,
+              time: extracted.time,
+              status: "confirmed"
+            });
+
+            if (!existing) {
+              const saved = await Appointment.create({
+                patientId: existingPatient._id,
+                patientName: existingPatient.name,
+                patientPhone: cleanPhone,
+                therapist,
+                date: extracted.date,
+                time: extracted.time,
+                type: apptType,
+                status: "confirmed",
+                payStatus: "pending",
+                amount
+              });
+              console.log(`✅ Appointment saved via AI: ${existingPatient.name} — ${extracted.date} at ${extracted.time}`);
+            } else {
+              console.log(`ℹ️ Appointment already exists for ${cleanPhone} on ${extracted.date}`);
+            }
           }
-        }
-
-        const apptType = typeMatch
-          ? typeMatch[1].charAt(0).toUpperCase() + typeMatch[1].slice(1)
-          : "Initial Assessment";
-
-        const therapist = therapistMatch
-          ? `Dr. ${therapistMatch[1].charAt(0).toUpperCase() + therapistMatch[1].slice(1)}`
-          : "Dr. Rao";
-
-        const priceMap = {
-          "Initial assessment": 1800, "Follow-up": 1200,
-          "Walk-in": 900, "Review": 1000, "Physiotherapy": 1500
-        };
-        const amount = Object.entries(priceMap).find(([k]) =>
-          apptType.toLowerCase().includes(k.toLowerCase()))?.[1] || 1200;
-
-        // Save appointment
-        const existing = await Appointment.findOne({
-          patientPhone: cleanPhone,
-          date: apptDate,
-          time: apptTime
-        });
-
-        if (!existing) {
-          await Appointment.create({
-            patientId: existingPatient._id,
-            patientName: existingPatient.name,
-            patientPhone: cleanPhone,
-            therapist,
-            date: apptDate,
-            time: apptTime,
-            type: apptType,
-            status: "confirmed",
-            payStatus: "pending",
-            amount
-          });
-          console.log(`✅ Appointment saved: ${existingPatient.name} — ${apptDate} at ${apptTime}`);
+        } catch (extractErr) {
+          console.log("Appointment extraction skipped:", extractErr.message);
         }
       }
     }
