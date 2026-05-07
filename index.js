@@ -9,10 +9,18 @@ const mongoose = require("mongoose");
 const app = express();
 app.use(express.json());
 
-// ─── CONNECT TO MONGODB ──────────────────────────────────────────────
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log("✅ MongoDB connected successfully"))
-  .catch(err => console.error("❌ MongoDB connection error:", err.message));
+// ─── CONNECT TO MONGODB (optional — bot works without it too) ───────
+let dbConnected = false;
+if (process.env.MONGODB_URI) {
+  mongoose.connect(process.env.MONGODB_URI)
+    .then(() => {
+      dbConnected = true;
+      console.log("✅ MongoDB connected successfully");
+    })
+    .catch(err => console.error("⚠️ MongoDB not connected — running without database:", err.message));
+} else {
+  console.log("⚠️ No MONGODB_URI — running without database");
+}
 
 // ─── SCHEMAS & MODELS ────────────────────────────────────────────────
 
@@ -208,9 +216,20 @@ app.post("/webhook", async (req, res) => {
 
     console.log(`📩 From ${from}: ${text}`);
 
-    // ── Check existing patient ────────────────────────────────────
+    // ── Auto-save new patient on first message ────────────────────
     const cleanPhone = from.replace(/\D/g, "");
-    const existingPatient = await Patient.findOne({ phone: cleanPhone });
+    let existingPatient = null;
+    if (dbConnected) {
+      existingPatient = await Patient.findOne({ phone: cleanPhone });
+      if (!existingPatient) {
+        existingPatient = await Patient.create({
+          name: `Patient ${cleanPhone.slice(-4)}`, // last 4 digits as temp name
+          phone: cleanPhone,
+          notes: `First message: "${text}"`,
+        });
+        console.log(`✅ New patient saved: ${cleanPhone}`);
+      }
+    }
 
     // ── Special commands ──────────────────────────────────────────
 
