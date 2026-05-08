@@ -772,12 +772,13 @@ app.post("/api/sessions", async (req, res) => {
     res.json(session);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// Get all patients
+  app.get("/api/patients", async (req, res) => {
   try {
     const patients = await Patient.find().sort({ createdAt: -1 });
     res.json(patients);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Get all appointments
