@@ -353,9 +353,26 @@ Return ONLY the JSON, no other text.`
             const therapist = extracted.therapist || "Dr. Rao";
             const payMode = extracted.payMode || "pending";
 
+            // Check if booking for someone else
+            const convHistory = conversations[from] || [];
+            const bookingForEntry = convHistory.find(m => m.content?.startsWith("BOOKING_FOR:"));
+            let apptPatientId = existingPatient?._id;
+            let apptPatientName = existingPatient?.name;
+            let apptPatientPhone = cleanPhone;
+
+            if (bookingForEntry) {
+              const parts = bookingForEntry.content.split(":");
+              apptPatientId = parts[1];
+              apptPatientName = parts[2];
+              const otherPatient = await Patient.findById(apptPatientId);
+              apptPatientPhone = otherPatient?.phone || cleanPhone;
+              // Clear BOOKING_FOR after use
+              conversations[from] = convHistory.filter(m => !m.content?.startsWith("BOOKING_FOR:"));
+            }
+
             // Check duplicate
             const existing = await Appointment.findOne({
-              patientPhone: cleanPhone,
+              patientPhone: apptPatientPhone,
               date: extracted.date,
               time: extracted.time,
               status: "confirmed"
@@ -363,9 +380,9 @@ Return ONLY the JSON, no other text.`
 
             if (!existing) {
               await Appointment.create({
-                patientId: existingPatient._id,
-                patientName: existingPatient.name,
-                patientPhone: cleanPhone,
+                patientId: apptPatientId,
+                patientName: apptPatientName,
+                patientPhone: apptPatientPhone,
                 therapist,
                 date: extracted.date,
                 time: extracted.time,
@@ -374,9 +391,9 @@ Return ONLY the JSON, no other text.`
                 payStatus: payMode === "clinic" ? "clinic" : "pending",
                 amount
               });
-              console.log(`✅ Appointment saved: ${existingPatient.name} — ${extracted.date} at ${extracted.time}`);
+              console.log(`✅ Appointment saved: ${apptPatientName} — ${extracted.date} at ${extracted.time}`);
             } else {
-              console.log(`ℹ️ Appointment already exists: ${cleanPhone} on ${extracted.date}`);
+              console.log(`ℹ️ Appointment already exists: ${apptPatientPhone} on ${extracted.date}`);
             }
           } else {
             console.log("ℹ️ Not enough info to save appointment yet");
@@ -402,7 +419,92 @@ Return ONLY the JSON, no other text.`
       return;
     }
 
-    // ── My Appointments ───────────────────────────────────────────
+    // ── Booking for someone else ──────────────────────────────────
+    const forSomeoneElse = ["for my", "for sister", "for brother", "for wife", "for husband",
+      "for mother", "for father", "for friend", "for daughter", "for son", "mere liye nahi",
+      "unke liye", "apni sister", "apni wife", "apne bhai", "apni maa", "apne papa"];
+    const isForOther = forSomeoneElse.some(k => lower.includes(k));
+
+    if (isForOther && dbConnected) {
+      // Check if we already have the other person's details
+      const history = conversations[from] || [];
+      const waitingForOtherName = history.some(m => m.content === "WAITING_FOR_OTHER_NAME");
+      const waitingForOtherPhone = history.some(m => m.content === "WAITING_FOR_OTHER_PHONE");
+
+      if (!waitingForOtherName && !waitingForOtherPhone) {
+        // Ask for the other person's name
+        conversations[from] = history.filter(m =>
+          m.content !== "WAITING_FOR_OTHER_NAME" &&
+          m.content !== "WAITING_FOR_OTHER_PHONE"
+        );
+        conversations[from].push({ role: "system", content: "WAITING_FOR_OTHER_NAME" });
+
+        await sendMessage(from,
+          `Sure! I can book for your family member.\n\nPlease share their full name:`
+        );
+        return;
+      }
+    }
+
+    // ── Handle other person name input ───────────────────────────
+    if (dbConnected) {
+      const history = conversations[from] || [];
+      const waitingForOtherName = history.some(m => m.content === "WAITING_FOR_OTHER_NAME");
+
+      if (waitingForOtherName) {
+        const otherName = text.trim();
+        // Save other person's name temporarily
+        conversations[from] = history.filter(m => m.content !== "WAITING_FOR_OTHER_NAME");
+        conversations[from].push({ role: "system", content: `OTHER_NAME:${otherName}` });
+        conversations[from].push({ role: "system", content: "WAITING_FOR_OTHER_PHONE" });
+
+        await sendMessage(from,
+          `Got it! And what is ${otherName}'s phone number?\n\n(Type their 10-digit mobile number, or type SKIP to use your number)`
+        );
+        return;
+      }
+
+      // ── Handle other person phone input ──────────────────────
+      const waitingForOtherPhone = history.some(m => m.content === "WAITING_FOR_OTHER_PHONE");
+
+      if (waitingForOtherPhone) {
+        const otherNameEntry = history.find(m => m.content?.startsWith("OTHER_NAME:"));
+        const otherName = otherNameEntry?.content?.replace("OTHER_NAME:", "") || "Family Member";
+        const otherPhone = lower === "skip" ? cleanPhone : text.replace(/\D/g, "");
+
+        // Clean up waiting states
+        conversations[from] = history.filter(m =>
+          m.content !== "WAITING_FOR_OTHER_PHONE" &&
+          !m.content?.startsWith("OTHER_NAME:")
+        );
+
+        // Create or find patient for the other person
+        let otherPatient = await Patient.findOne({ phone: otherPhone });
+        if (!otherPatient) {
+          otherPatient = await Patient.create({
+            name: otherName,
+            phone: otherPhone,
+            notes: `Added by ${existingPatient?.name || cleanPhone}`,
+          });
+          console.log(`✅ New patient created for family member: ${otherName}`);
+        } else {
+          // Update name if it was auto-generated
+          if (otherPatient.name.startsWith("Patient ")) {
+            await Patient.findByIdAndUpdate(otherPatient._id, { name: otherName });
+            otherPatient.name = otherName;
+          }
+        }
+
+        // Store the other patient ID for the next booking message
+        conversations[from].push({ role: "system", content: `BOOKING_FOR:${otherPatient._id}:${otherName}` });
+
+        await sendMessage(from,
+          `Perfect! Now please share the appointment details for ${otherName}:\n\n` +
+          `Example: Tomorrow at 10am with Dr. Rao for Initial Assessment`
+        );
+        return;
+      }
+    }
     if (lower === "my appointments" || lower === "appointments" || lower === "my bookings") {
       if (existingPatient) {
         const appts = await Appointment.find({
