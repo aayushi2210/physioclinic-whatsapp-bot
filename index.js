@@ -59,18 +59,48 @@ const appointmentSchema = new mongoose.Schema({
   createdAt:  { type: Date, default: Date.now }
 });
 
+const packageSchema = new mongoose.Schema({
+  patientId:   { type: mongoose.Schema.Types.ObjectId, ref: "Patient" },
+  patientName: String,
+  patientPhone:String,
+  name:        { type: String, required: true },
+  total:       { type: Number, required: true },
+  done:        { type: Number, default: 0 },
+  amount:      Number,
+  payStatus:   { type: String, default: "pending" },
+  therapist:   String,
+  startDate:   String,
+  active:      { type: Boolean, default: true },
+  createdAt:   { type: Date, default: Date.now }
+});
+
+const sessionSchema = new mongoose.Schema({
+  packageId:   { type: mongoose.Schema.Types.ObjectId, ref: "Package" },
+  patientId:   { type: mongoose.Schema.Types.ObjectId, ref: "Patient" },
+  patientName: String,
+  no:          Number,
+  date:        String,
+  time:        String,
+  therapist:   String,
+  treatments:  [String],
+  notes:       String,
+  createdAt:   { type: Date, default: Date.now }
+});
+
 const Patient     = mongoose.model("Patient",     patientSchema);
 const Appointment = mongoose.model("Appointment", appointmentSchema);
+const Package     = mongoose.model("Package",     packageSchema);
+const Session     = mongoose.model("Session",     sessionSchema);
 
 // Per-user conversation history (in-memory is fine for this)
 const conversations = {};
 
 // ─── CLINIC SYSTEM PROMPT ───────────────────────────────────────────
-const SYSTEM_PROMPT = `You are a WhatsApp chatbot receptionist for PhysioClinic, a physiotherapy clinic in Noida Sector-41, India.
+const SYSTEM_PROMPT = `You are a WhatsApp chatbot receptionist for PhysioClinic, a physiotherapy clinic in South Delhi, India.
 
 CLINIC DETAILS:
 - Hours: Monday to Saturday, 8:00 AM to 6:00 PM. Closed Sundays.
-- Location: Noida Sector-41
+- Location: South Delhi
 
 THERAPISTS:
 - Dr. Rao: Back and spine specialist
@@ -133,7 +163,10 @@ async function getAIReply(userPhone, userMessage, contextNote = "") {
   const history = conversations[userPhone];
 
   history.push({ role: "user", content: userMessage });
-  const recentHistory = history.slice(-10);
+  const recentHistory = history
+    .filter(m => m.role === "user" || m.role === "assistant")
+    .filter(m => m.content && typeof m.content === "string")
+    .slice(-10);
 
   try {
     const response = await axios.post(
@@ -680,8 +713,65 @@ app.post("/api/send-schedule", sendScheduleHandler);
 
 // ─── API ENDPOINTS (for Doctor Dashboard) ────────────────────────────
 
-// Get all patients
-app.get("/api/patients", async (req, res) => {
+// Get all packages
+app.get("/api/packages", async (req, res) => {
+  try {
+    const packages = await Package.find().sort({ createdAt: -1 });
+    res.json(packages);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Get packages for a specific patient
+app.get("/api/packages/:patientId", async (req, res) => {
+  try {
+    const packages = await Package.find({ patientId: req.params.patientId }).sort({ createdAt: -1 });
+    res.json(packages);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Add new package
+app.post("/api/packages", async (req, res) => {
+  try {
+    const pkg = new Package(req.body);
+    await pkg.save();
+    res.json(pkg);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Update package (mark session done)
+app.put("/api/packages/:id", async (req, res) => {
+  try {
+    const pkg = await Package.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json(pkg);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Get all sessions
+app.get("/api/sessions", async (req, res) => {
+  try {
+    const sessions = await Session.find().sort({ createdAt: -1 });
+    res.json(sessions);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Get sessions for a package
+app.get("/api/sessions/:packageId", async (req, res) => {
+  try {
+    const sessions = await Session.find({ packageId: req.params.packageId }).sort({ no: 1 });
+    res.json(sessions);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Add new session
+app.post("/api/sessions", async (req, res) => {
+  try {
+    const session = new Session(req.body);
+    await session.save();
+    // Update package done count
+    await Package.findByIdAndUpdate(req.body.packageId, { $inc: { done: 1 } });
+    res.json(session);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
   try {
     const patients = await Patient.find().sort({ createdAt: -1 });
     res.json(patients);
