@@ -1,4 +1,4 @@
-// PhysioClinic WhatsApp Bot — Complete Backend
+// NexoraaCare WhatsApp Bot — Complete Backend
 // Env vars: WHATSAPP_TOKEN, WHATSAPP_PHONE_ID, VERIFY_TOKEN, GROQ_API_KEY, MONGODB_URI, DOCTOR_PHONE
 
 const express  = require("express");
