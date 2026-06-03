@@ -1,6 +1,6 @@
-<<<<<<< HEAD
+
 {
-  "name": "physiodesk",
+  "name": "NexoraaCare",
   "version": "0.1.0",
   "private": true,
   "dependencies": {
@@ -38,9 +38,9 @@
     ]
   }
 }
-=======
+
 {
-  "name": "physioclinic-whatsapp-bot",
+  "name": "NexoraaCare",
   "version": "1.0.0",
   "description": "WhatsApp chatbot for PhysioClinic",
   "main": "index.js",
@@ -57,4 +57,3 @@
     "node": ">=18.0.0"
   }
 }
->>>>>>> 1b67a6a0a56d7958d183eb053169eacfd590b5c0
