@@ -1,4 +1,4 @@
-// NexoraaCare WhatsApp Bot — Complete Backend
+// PhysioClinic WhatsApp Bot — Complete Backend
 // Env vars: WHATSAPP_TOKEN, WHATSAPP_PHONE_ID, VERIFY_TOKEN, GROQ_API_KEY, MONGODB_URI, DOCTOR_PHONE
 
 const express  = require("express");
@@ -26,77 +26,16 @@ if (process.env.MONGODB_URI) {
   console.log("⚠️ No MONGODB_URI — running without database");
 }
 
-// ─── SCHEMAS ─────────────────────────────────────────────────────────
-const patientSchema = new mongoose.Schema({
-  name:      { type: String, required: true },
-  phone:     { type: String, required: true, unique: true },
-  condition: String,
-  address:   String,
-  email:     String,
-  dob:       String,
-  notes:     String,
-  treatment: String,
-  createdAt: { type: Date, default: Date.now }
-});
+// ─── MODELS ──────────────────────────────────────────────────────────
+// All schemas + validation now live in the ./models folder.
+// (Patient, Appointment, Package, Session, Feedback keep the same names,
+//  so everything below works unchanged. New: Clinic, PackageTemplate,
+//  TreatmentPlan, Invoice.)
+const {
+  Clinic, Patient, Appointment, PackageTemplate,
+  Package, TreatmentPlan, Session, Invoice, Feedback,
+} = require("./models");
 
-const appointmentSchema = new mongoose.Schema({
-  patientId:   { type: mongoose.Schema.Types.ObjectId, ref: "Patient" },
-  patientName: String,
-  patientPhone:String,
-  therapist:   String,
-  date:        String,
-  time:        String,
-  type:        String,
-  status:      { type: String, default: "confirmed" },
-  payStatus:   { type: String, default: "pending" },
-  amount:      Number,
-  createdAt:   { type: Date, default: Date.now }
-});
-
-const packageSchema = new mongoose.Schema({
-  patientId:   { type: mongoose.Schema.Types.ObjectId, ref: "Patient" },
-  patientName: String,
-  patientPhone:String,
-  name:        { type: String, required: true },
-  total:       { type: Number, required: true },
-  done:        { type: Number, default: 0 },
-  amount:      Number,
-  payStatus:   { type: String, default: "pending" },
-  therapist:   String,
-  startDate:   String,
-  active:      { type: Boolean, default: true },
-  createdAt:   { type: Date, default: Date.now }
-});
-
-const sessionSchema = new mongoose.Schema({
-  packageId:   { type: mongoose.Schema.Types.ObjectId, ref: "Package" },
-  patientId:   { type: mongoose.Schema.Types.ObjectId, ref: "Patient" },
-  patientName: String,
-  no:          Number,
-  date:        String,
-  time:        String,
-  therapist:   String,
-  treatments:  [String],
-  notes:       String,
-  createdAt:   { type: Date, default: Date.now }
-});
-
-const feedbackSchema = new mongoose.Schema({
-  patientId:     { type: mongoose.Schema.Types.ObjectId, ref: "Patient" },
-  patientName:   String,
-  patientPhone:  String,
-  appointmentId: { type: mongoose.Schema.Types.ObjectId, ref: "Appointment" },
-  therapist:     String,
-  rating:        { type: Number, min: 1, max: 5 },
-  comment:       String,
-  createdAt:     { type: Date, default: Date.now }
-});
-
-const Patient     = mongoose.model("Patient",     patientSchema);
-const Appointment = mongoose.model("Appointment", appointmentSchema);
-const Package     = mongoose.model("Package",     packageSchema);
-const Session     = mongoose.model("Session",     sessionSchema);
-const Feedback    = mongoose.model("Feedback",    feedbackSchema);
 
 const conversations = {};
 const pendingFeedback = {}; // phone -> appointmentId waiting for feedback
@@ -222,7 +161,7 @@ app.post("/webhook", async (req, res) => {
           phone: cleanPhone,
           notes: `First contact: "${text}"`,
         });
-        await sendMessage(from, `Welcome to PhysioClinic! 🏥\n\nLet me set up your profile.\n\nStep 1/4 — Please share your full name:`);
+        await sendMessage(from, `Welcome to NexoraaClinic! 🏥\n\nLet me set up your profile.\n\nStep 1/4 — Please share your full name:`);
         conversations[from] = conversations[from] || [];
         conversations[from].push({ role: "system", content: "WAITING_FOR_NAME" });
         return;
@@ -307,7 +246,7 @@ hasAppointment=true only if BOTH date AND time found.`
     if (["hi","hello","start","hey"].includes(lower)) {
       await sendMessage(from, existingPatient
         ? `Welcome back, ${existingPatient.name}! 😊\n\n1. Book appointment\n2. My appointments\n3. Cancel/reschedule\n4. Pricing\n5. Talk to reception`
-        : `Welcome to PhysioClinic!\n\n1. Book appointment\n2. Check pricing\n3. Talk to reception`);
+        : `Welcome to NexoraaClinic!\n\n1. Book appointment\n2. Check pricing\n3. Talk to reception`);
       return;
     }
 
@@ -368,7 +307,7 @@ const sendScheduleHandler = async (req, res) => {
       await sendMessage(DOCTOR_PHONE, `🗓 Schedule — ${today}\n\nNo appointments today.\n\n— PhysioDesk`);
     } else {
       const lines = todayAppts.map((a,i) => `${i+1}. ${a.patientName}\n   📋 ${a.type} · ${a.therapist}\n   🕐 ${a.time}\n   💵 ₹${a.amount} · ${a.payStatus}`).join("\n\n");
-      await sendMessage(DOCTOR_PHONE, `🗓 Schedule — ${today}\n\n${todayAppts.length} patients\n\n${lines}\n\n— PhysioDesk`);
+      await sendMessage(DOCTOR_PHONE, `🗓 Schedule — ${today}\n\n${todayAppts.length} patients\n\n${lines}\n\n— NexoraaDesk`);
     }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
@@ -441,7 +380,7 @@ app.post("/api/packages/:id/mark-session", async (req, res) => {
       const toPhone = patient.phone.startsWith("91") ? patient.phone : `91${patient.phone.replace(/\D/g,"")}`;
       await sendMessage(toPhone, `✅ Session Completed!\n\nPackage: ${pkg.name}\nDone: ${newDone}/${pkg.total}\nRemaining: ${remaining} session${remaining!==1?"s":""}\n\nSee you next time! 😊\n— PhysioClinic`);
       if (remaining <= 2 && remaining > 0) await sendMessage(toPhone, `⚠️ Package almost done!\n\nOnly ${remaining} session${remaining!==1?"s":""} of "${pkg.name}" left.\n\nContact us to renew.\n📞 +91-XXXXXXXXXX\n\n— PhysioClinic`);
-      if (remaining === 0) await sendMessage(toPhone, `🎉 Package Complete!\n\nAll ${pkg.total} sessions of "${pkg.name}" done! 💪\n— PhysioClinic`);
+      if (remaining === 0) await sendMessage(toPhone, `🎉 Package Complete!\n\nAll ${pkg.total} sessions of "${pkg.name}" done! 💪\n— NexoraaClinic`);
     }
     res.json({ updated, remaining });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -477,7 +416,7 @@ app.post("/api/send-feedback/:appointmentId", async (req, res) => {
     const toPhone = appt.patientPhone.startsWith("91") ? appt.patientPhone : `91${appt.patientPhone.replace(/\D/g,"")}`;
     pendingFeedback[`${toPhone}`] = { appointmentId: req.params.appointmentId };
     await sendMessage(toPhone,
-      `Hi ${appt.patientName}! 👋\n\nThank you for visiting PhysioClinic.\n\nHow was your experience with ${appt.therapist}?\n\nPlease reply with a number:\n⭐ 1 — Poor\n⭐⭐ 2 — Fair\n⭐⭐⭐ 3 — Good\n⭐⭐⭐⭐ 4 — Very Good\n⭐⭐⭐⭐⭐ 5 — Excellent\n\n— PhysioClinic`
+      `Hi ${appt.patientName}! 👋\n\nThank you for visiting NexoraaClinic.\n\nHow was your experience with ${appt.therapist}?\n\nPlease reply with a number:\n⭐ 1 — Poor\n⭐⭐ 2 — Fair\n⭐⭐⭐ 3 — Good\n⭐⭐⭐⭐ 4 — Very Good\n⭐⭐⭐⭐⭐ 5 — Excellent\n\n— PhysioClinic`
     );
     res.json({ success: true, message: "Feedback request sent" });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -485,7 +424,7 @@ app.post("/api/send-feedback/:appointmentId", async (req, res) => {
 
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────
 app.get("/", (req, res) => {
-  res.json({ status: "running", message: "PhysioClinic Bot", database: mongoose.connection.readyState === 1 ? "connected" : "disconnected" });
+  res.json({ status: "running", message: "Clinic Bot", database: mongoose.connection.readyState === 1 ? "connected" : "disconnected" });
 });
 
 const PORT = process.env.PORT || 3000;
